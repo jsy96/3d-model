@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>棋盘格手动画框</title>
+  <style>
+    :root { color-scheme:light; --ink:#172033; --muted:#64748b; --line:#dbe3ec; --blue:#2563eb; --green:#15803d; --red:#b91c1c; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f1f5f9; color:var(--ink); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    button { font:inherit; cursor:pointer; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .topbar { position:sticky; top:0; z-index:3; display:flex; align-items:center; gap:18px; padding:12px 18px; background:white; border-bottom:1px solid var(--line); box-shadow:0 2px 8px #0f172a0a; }
+    .brand { min-width:250px; }
+    h1 { margin:0; font-size:18px; }
+    .subtitle { margin-top:3px; color:var(--muted); font-size:12px; }
+    .summary { flex:1; min-width:120px; color:#334155; font-size:13px; }
+    .actions { display:flex; align-items:center; gap:8px; }
+    .primary,.secondary { min-height:36px; padding:7px 12px; border:1px solid var(--line); border-radius:8px; background:white; color:#334155; font-weight:650; }
+    .primary { border-color:var(--blue); background:var(--blue); color:white; }
+    .layout { display:grid; grid-template-columns:250px minmax(350px,1fr) 310px; gap:12px; padding:12px; height:calc(100vh - 67px); min-height:500px; }
+    .panel { min-height:0; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:white; }
+    .photo-nav,.box-panel,.viewer { display:flex; flex-direction:column; }
+    .panel-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--line); font-weight:700; }
+    .meta { color:var(--muted); font-size:11px; font-weight:400; }
+    .photo-list,.box-list { overflow:auto; padding:7px; }
+    .photo-item { display:grid; grid-template-columns:30px minmax(0,1fr) auto; align-items:center; gap:8px; width:100%; padding:9px; border:0; border-radius:8px; background:transparent; color:var(--ink); text-align:left; }
+    .photo-item:hover { background:#f1f5f9; }
+    .photo-item.active { outline:1px solid #bfdbfe; background:#eff6ff; }
+    .photo-num { display:grid; width:27px; height:27px; place-items:center; border-radius:50%; background:#e2e8f0; color:#475569; font-size:11px; }
+    .photo-item.active .photo-num { background:var(--blue); color:white; }
+    .photo-name { overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+    .photo-count { color:var(--muted); font-size:11px; white-space:nowrap; }
+    .viewer-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 13px; border-bottom:1px solid var(--line); }
+    .viewer-title { min-width:0; }
+    .viewer-title strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .viewer-title small { color:var(--muted); }
+    .zoom-controls { display:flex; flex-shrink:0; gap:5px; }
+    .small-button { padding:5px 8px; border:1px solid var(--line); border-radius:7px; background:white; color:#334155; }
+    .image-scroller { display:flex; flex:1; align-items:center; justify-content:center; overflow:auto; padding:12px; background:#111827; }
+    .image-scroller.zoomed { display:block; }
+    .image-wrap { position:relative; flex:none; line-height:0; }
+    #preview { display:block; width:100%; height:100%; user-select:none; -webkit-user-drag:none; }
+    #overlay { position:absolute; inset:0; width:100%; height:100%; touch-action:none; cursor:crosshair; }
+    .caption { padding:8px 12px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; }
+    .box-toolbar { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; padding:9px; border-bottom:1px solid var(--line); }
+    .box-toolbar button { min-height:32px; padding:5px 3px; border:1px solid var(--line); border-radius:7px; background:white; color:#475569; font-size:12px; }
+    .auto-fit-toggle { grid-column:1/-1; display:flex; align-items:center; gap:8px; min-height:32px; padding:5px 8px; border:1px solid #93c5fd; border-radius:7px; background:#eff6ff; color:#1d4ed8; font-weight:700; }
+    .auto-fit-toggle input { width:16px; height:16px; accent-color:#2563eb; }
+    .box-toolbar .delete { color:var(--red); }
+    .box-card { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; padding:9px 10px; border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+    .box-card.active { border-color:#60a5fa; background:#eff6ff; }
+    .box-card.processing { border-color:#f59e0b; background:#fffbeb; box-shadow:0 0 0 2px #f59e0b33; }
+    .box-card.processing.active { border-color:#d97706; background:#fef3c7; }
+    .processing-status { display:inline-flex; align-items:center; gap:5px; color:#b45309; font-weight:700; white-space:nowrap; }
+    .processing-spinner { width:12px; height:12px; border:2px solid #fcd34d; border-top-color:#b45309; border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .box-actions { display:flex; flex-shrink:0; align-items:center; gap:8px; }
+    .box-card button { border:0; background:transparent; color:var(--red); font-size:12px; }
+    .box-card button.refine { color:#1d4ed8; }
+    .box-card button:disabled { cursor:not-allowed; opacity:.5; }
+    .empty { margin:auto; padding:24px; color:#94a3b8; text-align:center; }
+    .toast { position:fixed; bottom:16px; left:50%; z-index:5; transform:translateX(-50%); padding:9px 13px; border-radius:8px; background:#166534; color:white; box-shadow:0 5px 18px #0f172a33; opacity:0; pointer-events:none; transition:opacity .2s; }
+    .toast.show { opacity:1; }
+    @media (max-width:1050px) { .layout { grid-template-columns:190px minmax(300px,1fr); height:auto; min-height:calc(100vh - 67px); } .box-panel { grid-column:1/-1; max-height:330px; } .box-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:6px; } .box-card { margin:0; } }
+    @media (max-width:650px) { .topbar { flex-wrap:wrap; gap:8px 12px; } .brand { min-width:0; } .summary { order:3; flex-basis:100%; } .actions { margin-left:auto; } .layout { display:flex; flex-direction:column; height:auto; min-height:calc(100vh - 100px); padding:8px; gap:8px; } .photo-nav { max-height:170px; } .photo-list { display:flex; gap:4px; overflow:auto; } .photo-item { min-width:190px; } .viewer { min-height:52vh; } .box-panel { max-height:none; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><h1>棋盘格手动画框</h1><div class="subtitle">当前项目：生产项目　·　数据目录：data</div></div>
+    <div class="summary" id="summary">正在读取本目录的图片…</div>
+    <div class="actions">
+      <label class="secondary" for="uploadInput">上传图片</label>
+      <input id="uploadInput" type="file" accept="image/*" multiple hidden>
+      <button class="secondary" id="exportButton" type="button">导出框选 JSON</button>
+    </div>
+  </header>
+  <main class="layout">
+    <aside class="panel photo-nav">
+      <div class="panel-heading"><span>照片</span><span id="imageCount" class="meta">0 张</span></div>
+      <div class="photo-list" id="photoList"><div class="empty">正在读取图片…</div></div>
+    </aside>
+    <section class="panel viewer">
+      <div class="viewer-head">
+        <div class="viewer-title"><strong id="currentName">等待图片</strong><small id="currentSummary"></small></div>
+        <div class="zoom-controls">
+          <button class="small-button" id="zoomOut" type="button" title="缩小">−</button>
+          <button class="small-button" id="zoomFit" type="button" title="适应窗口">适应</button>
+          <button class="small-button" id="zoomIn" type="button" title="放大">+</button>
+        </div>
+      </div>
+      <div class="image-scroller" id="imageScroller"><div class="empty">从左侧选择一张照片</div></div>
+      <div class="caption" id="caption">框在棋盘内部几格；自动检测完整9×12格棋盘并校验黑白交替，旋转方向也支持。</div>
+    </section>
+    <aside class="panel box-panel">
+      <div class="panel-heading"><span>本图的框</span><span id="boxCount" class="meta">0 块</span></div>
+      <div class="box-toolbar">
+        <label class="auto-fit-toggle"><input id="refineOnDraw" type="checkbox" checked>画完自动贴合</label>
+        <button id="undoButton" type="button" title="撤销最后画的框">撤销一个</button>
+        <button class="delete" id="deleteButton" type="button" title="删除选中的框">删除选中</button>
+        <button class="delete" id="clearButton" type="button" title="清除此图所有框">清空本图</button>
+      </div>
+      <div class="box-list" id="boxList"><div class="empty">在照片上拖动鼠标来画框</div></div>
+    </aside>
+  </main>
+  <div class="toast" id="toast"></div>
+  <script>
+    const state = { images: [], current: -1, boxes: {}, imageSizes: {}, dirtyNames: new Set(), savingNames: new Map(), selected: -1, naturalWidth: 0, naturalHeight: 0, fitWidth: 0, displayWidth: 0, saveTimer: 0, drawing: null, refining: null };
+    const $ = (id) => document.getElementById(id);
+    const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
+    const image = () => state.images[state.current];
+    const boxes = () => image() ? (state.boxes[image().name] || []) : [];
+    const isRefiningBox = (name, box) => Boolean(state.refining && state.refining.name === name && state.refining.box === box);
+    const boxPoints = (box) => box.points || [
+      { x:box.x, y:box.y }, { x:box.x + box.w, y:box.y },
+      { x:box.x + box.w, y:box.y + box.h }, { x:box.x, y:box.y + box.h }
+    ];
+
+    async function request(url, options) {
+      const response = await fetch(url, options);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "请求失败");
+      return data;
+    }
+
+    function updateSummary() {
+      const count = Object.values(state.boxes).reduce((sum, items) => sum + items.length, 0);
+      const saving = state.savingNames.size > 0;
+      $("summary").textContent = "生产项目/data · " + state.images.length + " 张照片 · 已画 " + count + " 个棋盘框 · " + (saving ? "正在保存…" : state.dirtyNames.size ? "等待保存" : "已保存");
+      $("imageCount").textContent = state.images.length + " 张";
+      $("boxCount").textContent = boxes().length + " 块";
+      const currentImage = image();
+      const currentBoxes = boxes();
+      const lastBox = currentBoxes[currentBoxes.length - 1];
+      $("undoButton").disabled = !lastBox || isRefiningBox(currentImage?.name, lastBox);
+      $("deleteButton").disabled = state.selected < 0 || !currentBoxes[state.selected] || isRefiningBox(currentImage?.name, currentBoxes[state.selected]);
+      const currentImageHasRefiningBox = currentImage && currentBoxes.some((box) => isRefiningBox(currentImage.name, box));
+      $("clearButton").disabled = !currentBoxes.length || currentImageHasRefiningBox;
+      $("clearButton").title = currentImageHasRefiningBox ? "有棋盘格正在贴合，完成后可清空" : "清除此图所有框";
+      $("caption").textContent = $("refineOnDraw").checked
+        ? "框在棋盘内部几格；自动检测完整9×12格棋盘并校验黑白交替，旋转方向也支持。"
+        : "只保存你拖出的矩形框；每张照片可以画多个框。";
+    }
+
+    function renderPhotoList() {
+      const list = $("photoList");
+      list.innerHTML = "";
+      if (!state.images.length) {
+        list.innerHTML = '<div class="empty">本目录没有找到图片</div>';
+        return;
+      }
+      state.images.forEach((item, index) => {
+        const button = document.createElement("button");
+        button.className = "photo-item" + (index === state.current ? " active" : "");
+        button.type = "button";
+        button.title = item.name;
+        button.innerHTML = '<span class="photo-num">' + String(index + 1).padStart(2, "0") + '</span><span class="photo-name">' + esc(item.name) + '</span><span class="photo-count">' + (state.boxes[item.name] || []).length + '框</span>';
+        button.addEventListener("click", () => selectImage(index));
+        list.append(button);
+      });
+    }
+
+    function renderBoxes() {
+      const list = $("boxList");
+      list.innerHTML = "";
+      if (!boxes().length) {
+        list.innerHTML = '<div class="empty">在照片上拖动鼠标来画框</div>';
+      } else {
+        boxes().forEach((box, index) => {
+          const item = document.createElement("div");
+          const processing = isRefiningBox(image()?.name, box);
+          item.className = "box-card" + (index === state.selected ? " active" : "") + (processing ? " processing" : "");
+          const kind = box.points ? "已贴合" : "矩形";
+          const size = box.detected_squares ? " · 匹配 " + box.detected_squares[0] + "×" + box.detected_squares[1] : "";
+          const status = processing ? ' <span class="processing-status"><span class="processing-spinner" aria-hidden="true"></span>正在贴合…</span>' : ' · ' + kind + size;
+          item.innerHTML = '<span>棋盘格 ' + String(index + 1).padStart(2, "0") + status + '</span><div class="box-actions"><button class="refine" type="button" aria-label="重新贴合此框">重新贴合</button><button type="button" aria-label="删除此框">删除</button></div>';
+          item.addEventListener("click", () => { state.selected = index; renderAll(); });
+          item.querySelector(".refine").disabled = Boolean(state.refining);
+          item.querySelector(".refine").addEventListener("click", (event) => {
+            event.stopPropagation();
+            state.selected = index;
+            renderAll();
+            refineBox(index);
+          });
+          const deleteButton = item.querySelector(".box-actions button:last-child");
+          deleteButton.disabled = processing;
+          deleteButton.title = processing ? "该框正在贴合，暂时不能删除" : "删除此框";
+          deleteButton.addEventListener("click", (event) => { event.stopPropagation(); removeBox(index); });
+          list.append(item);
+        });
+      }
+      updateSummary();
+    }
+
+    function renderAll() {
+      renderPhotoList();
+      renderBoxes();
+      drawOverlay();
+    }
+
+    function selectImage(index) {
+      state.current = index;
+      state.selected = -1;
+      state.drawing = null;
+      const item = image();
+      $("currentName").textContent = item.name;
+      $("currentSummary").textContent = (state.boxes[item.name] || []).length + " 个手动画框";
+      const scroller = $("imageScroller");
+      scroller.classList.remove("zoomed");
+      scroller.innerHTML = '<div class="image-wrap" id="imageWrap"><img id="preview" alt="待手动画框的照片"><canvas id="overlay"></canvas></div>';
+      const photo = $("preview");
+      photo.onload = () => {
+        state.naturalWidth = photo.naturalWidth;
+        state.naturalHeight = photo.naturalHeight;
+        state.imageSizes[item.name] = { width:photo.naturalWidth, height:photo.naturalHeight };
+        fitImage();
+        renderAll();
+      };
+      photo.onerror = () => { scroller.innerHTML = '<div class="empty">图片读取失败：' + esc(item.name) + '</div>'; };
+      photo.src = item.url;
+      renderAll();
+    }
+
+    function fitImage() {
+      const scroller = $("imageScroller");
+      if (!image() || !state.naturalWidth || !$("preview")) return;
+      const maxW = Math.max(100, scroller.clientWidth - 26);
+      const maxH = Math.max(100, scroller.clientHeight - 26);
+      state.fitWidth = Math.min(state.naturalWidth, maxW, maxH * state.naturalWidth / state.naturalHeight);
+      state.displayWidth = state.fitWidth;
+      applyImageSize();
+    }
+
+    function applyImageSize() {
+      const wrap = $("imageWrap");
+      const photo = $("preview");
+      if (!wrap || !photo || !state.displayWidth) return;
+      const height = state.displayWidth * state.naturalHeight / state.naturalWidth;
+      wrap.style.width = state.displayWidth + "px";
+      wrap.style.height = height + "px";
+      $("imageScroller").classList.toggle("zoomed", state.displayWidth > state.fitWidth + 1);
+      drawOverlay();
+    }
+
+    function drawOverlay() {
+      const canvas = $("overlay");
+      if (!canvas || !state.naturalWidth) return;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.round(rect.width * ratio);
+      canvas.height = Math.round(rect.height * ratio);
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+      boxes().forEach((box, index) => {
+        const points = boxPoints(box).map((point) => ({ x:point.x * rect.width, y:point.y * rect.height }));
+        ctx.fillStyle = index === state.selected ? "rgba(37,99,235,.17)" : "rgba(34,197,94,.12)";
+        ctx.strokeStyle = index === state.selected ? "#60a5fa" : "#22c55e";
+        ctx.lineWidth = index === state.selected ? 3 : 2;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = index === state.selected ? "#1d4ed8" : "#15803d";
+        ctx.font = "bold 14px -apple-system, BlinkMacSystemFont, sans-serif";
+        ctx.fillText(String(index + 1), points[0].x + 5, Math.max(16, points[0].y + 18));
+      });
+      if (state.drawing) {
+        const x = Math.min(state.drawing.x0, state.drawing.x1);
+        const y = Math.min(state.drawing.y0, state.drawing.y1);
+        const w = Math.abs(state.drawing.x1 - state.drawing.x0);
+        const h = Math.abs(state.drawing.y1 - state.drawing.y0);
+        ctx.fillStyle = "rgba(250,204,21,.18)";
+        ctx.strokeStyle = "#facc15";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.fillRect(x * rect.width, y * rect.height, w * rect.width, h * rect.height);
+        ctx.strokeRect(x * rect.width, y * rect.height, w * rect.width, h * rect.height);
+        ctx.setLineDash([]);
+      }
+    }
+
+    function pointerPoint(event) {
+      const rect = $("overlay").getBoundingClientRect();
+      return { x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) };
+    }
+
+    $("imageScroller").addEventListener("pointerdown", (event) => {
+      if (event.target.id !== "overlay" || !image()) return;
+      const point = pointerPoint(event);
+      state.drawing = { x0: point.x, y0: point.y, x1: point.x, y1: point.y };
+      event.target.setPointerCapture(event.pointerId);
+      drawOverlay();
+    });
+    $("imageScroller").addEventListener("pointermove", (event) => {
+      if (event.target.id !== "overlay") return;
+      const point = pointerPoint(event);
+      if (!state.drawing) return;
+      state.drawing.x1 = point.x;
+      state.drawing.y1 = point.y;
+      drawOverlay();
+    });
+    $("imageScroller").addEventListener("pointerup", (event) => {
+      if (!state.drawing || event.target.id !== "overlay") return;
+      const d = state.drawing;
+      const x = Math.min(d.x0, d.x1), y = Math.min(d.y0, d.y1);
+      const w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
+      state.drawing = null;
+      if (w * state.displayWidth < 12 || h * state.displayWidth * state.naturalHeight / state.naturalWidth < 12) {
+        drawOverlay();
+        return;
+      }
+      const list = boxes();
+      list.push({ x:x, y:y, w:w, h:h });
+      state.boxes[image().name] = list;
+      state.selected = list.length - 1;
+      markDirty();
+      renderAll();
+      if ($("refineOnDraw").checked) refineBox(state.selected);
+    });
+    $("imageScroller").addEventListener("pointercancel", () => { state.drawing = null; drawOverlay(); });
+
+    function removeBox(index) {
+      const list = boxes();
+      if (index < 0 || index >= list.length) return;
+      if (isRefiningBox(image()?.name, list[index])) {
+        showToast("该框正在贴合，暂时不能删除。", true);
+        return;
+      }
+      list.splice(index, 1);
+      state.selected = -1;
+      markDirty();
+      renderAll();
+    }
+
+    $("undoButton").addEventListener("click", () => removeBox(boxes().length - 1));
+    $("deleteButton").addEventListener("click", () => removeBox(state.selected));
+    $("refineOnDraw").addEventListener("change", updateSummary);
+    async function refineBox(index) {
+      const currentImage = image();
+      const name = currentImage?.name;
+      const box = name ? (state.boxes[name] || [])[index] : null;
+      if (!name || !box || state.refining) return;
+      const seedPoints = box.seed_points || boxPoints(box);
+      state.refining = { name, box };
+      renderBoxes();
+      try {
+        const result = await request("/api/refine", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({ name:name, points:seedPoints })
+        });
+        if (!(state.boxes[name] || []).includes(box)) return;
+        box.points = result.points;
+        box.seed_points = result.seed_points || seedPoints;
+        box.detected_squares = result.detected_squares;
+        delete box.x;
+        delete box.y;
+        delete box.w;
+        delete box.h;
+        markDirty(name);
+        renderAll();
+        showToast("已自动贴合 " + result.detected_squares[0] + "×" + result.detected_squares[1] + " 格棋盘");
+      } catch (error) {
+        showToast(error.message + "，原框已保留。", true);
+      } finally {
+        state.refining = null;
+        renderBoxes();
+      }
+    }
+    $("clearButton").addEventListener("click", () => {
+      if (!image() || !boxes().length || boxes().some((box) => isRefiningBox(image().name, box))) return;
+      state.boxes[image().name] = [];
+      state.selected = -1;
+      markDirty();
+      renderAll();
+    });
+    $("zoomIn").addEventListener("click", () => { if (state.fitWidth) { state.displayWidth = Math.min(state.naturalWidth * 2, state.displayWidth * 1.25); applyImageSize(); } });
+    $("zoomOut").addEventListener("click", () => { if (state.fitWidth) { state.displayWidth = Math.max(state.fitWidth * .45, state.displayWidth / 1.25); applyImageSize(); } });
+    $("zoomFit").addEventListener("click", fitImage);
+    window.addEventListener("resize", () => { if (image()) fitImage(); });
+    window.addEventListener("keydown", (event) => {
+      if (!state.images.length) return;
+      if (event.key === "ArrowLeft") selectImage(Math.max(0, state.current - 1));
+      if (event.key === "ArrowRight") selectImage(Math.min(state.images.length - 1, state.current + 1));
+      if ((event.key === "Delete" || event.key === "Backspace") && state.selected >= 0) removeBox(state.selected);
+      if (event.key === "Escape") { state.drawing = null; drawOverlay(); }
+    });
+
+    function markDirty(name = image()?.name) {
+      if (!name) return;
+      state.dirtyNames.add(name);
+      updateSummary();
+      clearTimeout(state.saveTimer);
+      state.saveTimer = setTimeout(() => saveBoxes(name).catch(() => {}), 350);
+    }
+
+    async function saveBoxes(name) {
+      if (!state.dirtyNames.has(name)) return;
+      if (state.savingNames.has(name)) {
+        await state.savingNames.get(name);
+        if (state.dirtyNames.has(name)) return saveBoxes(name);
+        return;
+      }
+      const snapshot = JSON.stringify(state.boxes[name] || []);
+      const size = state.imageSizes[name] || {};
+      const task = request("/api/boxes", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ name:name, boxes:state.boxes[name] || [], image_width:size.width, image_height:size.height })
+      }).then(() => {
+        if (JSON.stringify(state.boxes[name] || []) === snapshot) state.dirtyNames.delete(name);
+      }).catch((error) => {
+        showToast("保存失败：" + error.message, true);
+        throw error;
+      });
+      state.savingNames.set(name, task);
+      updateSummary();
+      try {
+        await task;
+      } finally {
+        state.savingNames.delete(name);
+        updateSummary();
+        if (state.dirtyNames.has(name)) state.saveTimer = setTimeout(() => saveBoxes(name).catch(() => {}), 800);
+      }
+    }
+
+    $("exportButton").addEventListener("click", async () => {
+      clearTimeout(state.saveTimer);
+      try {
+        const names = Array.from(state.dirtyNames);
+        await Promise.all(names.map((name) => saveBoxes(name)));
+        window.location.href = "/api/export.json";
+      } catch (_) {
+        showToast("保存未完成，请确认本机网页服务正常后重试。", true);
+      }
+    });
+
+    $("uploadInput").addEventListener("change", async (event) => {
+      const files = Array.from(event.target.files || []);
+      event.target.value = "";
+      if (!files.length) return;
+      const previousName = image()?.name;
+      let uploaded = 0;
+      const failures = [];
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        $("summary").textContent = "正在上传到 生产项目/data/images：" + (index + 1) + "/" + files.length;
+        try {
+          await request("/api/upload?name=" + encodeURIComponent(file.name), {
+            method:"POST",
+            headers:{"Content-Type":file.type || "application/octet-stream"},
+            body:file
+          });
+          uploaded += 1;
+        } catch (error) {
+          failures.push(file.name + "：" + error.message);
+        }
+      }
+      try {
+        const data = await request("/api/data");
+        state.images = data.images || [];
+        state.boxes = data.boxes || {};
+        state.imageSizes = data.image_sizes || {};
+        renderAll();
+        const selectedIndex = state.images.findIndex((item) => item.name === previousName);
+        if (selectedIndex >= 0) selectImage(selectedIndex);
+        else if (state.images.length) selectImage(0);
+        if (failures.length) showToast("已上传 " + uploaded + " 张；失败 " + failures.length + " 张：" + failures[0], true);
+        else showToast("已上传 " + uploaded + " 张到 生产项目/data/images");
+      } catch (error) {
+        showToast("上传后刷新列表失败：" + error.message, true);
+      }
+    });
+
+    let toastTimer;
+    function showToast(message, error) {
+      const toast = $("toast");
+      toast.textContent = message;
+      toast.style.background = error ? "#b91c1c" : "#166534";
+      toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 2400);
+    }
+
+    async function init() {
+      try {
+        const data = await request("/api/data");
+        state.images = data.images;
+        state.boxes = data.boxes || {};
+        state.imageSizes = data.image_sizes || {};
+        $("summary").textContent = state.images.length + " 张照片 · 框选会自动保存到本机";
+        renderAll();
+        if (state.images.length) selectImage(0);
+      } catch (error) {
+        $("summary").textContent = "读取失败：" + error.message;
+        $("photoList").innerHTML = '<div class="empty">' + esc(error.message) + '</div>';
+      }
+    }
+    init();
+  </script>
+</body>
+</html>

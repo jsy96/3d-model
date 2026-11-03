@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>棋盘格手动画框</title>
+  <title>棋盘格自动检测与复核</title>
   <style>
     :root { color-scheme:light; --ink:#172033; --muted:#64748b; --line:#dbe3ec; --blue:#2563eb; --green:#15803d; --red:#b91c1c; }
     * { box-sizing:border-box; }
@@ -37,19 +37,36 @@
     .viewer-title small { color:var(--muted); }
     .zoom-controls { display:flex; flex-shrink:0; gap:5px; }
     .small-button { padding:5px 8px; border:1px solid var(--line); border-radius:7px; background:white; color:#334155; }
-    .image-scroller { display:flex; flex:1; align-items:center; justify-content:center; overflow:auto; padding:12px; background:#111827; }
+    .image-scroller { display:flex; flex:1; align-items:center; justify-content:center; overflow:auto; padding:12px; background:#111827; overscroll-behavior:contain; }
     .image-scroller.zoomed { display:block; }
+    .image-scroller.pan-ready { cursor:grab; }
+    .image-scroller.panning { cursor:grabbing; }
     .image-wrap { position:relative; flex:none; line-height:0; }
     #preview { display:block; width:100%; height:100%; user-select:none; -webkit-user-drag:none; }
     #overlay { position:absolute; inset:0; width:100%; height:100%; touch-action:none; cursor:crosshair; }
     .caption { padding:8px 12px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; }
-    .box-toolbar { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; padding:9px; border-bottom:1px solid var(--line); }
-    .box-toolbar button { min-height:32px; padding:5px 3px; border:1px solid var(--line); border-radius:7px; background:white; color:#475569; font-size:12px; }
-    .auto-fit-toggle { grid-column:1/-1; display:flex; align-items:center; gap:8px; min-height:32px; padding:5px 8px; border:1px solid #93c5fd; border-radius:7px; background:#eff6ff; color:#1d4ed8; font-weight:700; }
-    .auto-fit-toggle input { width:16px; height:16px; accent-color:#2563eb; }
-    .box-toolbar .delete { color:var(--red); }
+    .detect-toolbar { padding:10px; border-bottom:1px solid var(--line); }
+    .detect-toolbar .primary { width:100%; margin-bottom:7px; }
+    .corner-legend { display:flex; flex-wrap:wrap; gap:4px 10px; margin-top:7px; color:var(--muted); font-size:11px; }
+    .corner-legend span { display:inline-flex; align-items:center; gap:4px; }
+    .legend-swatch { width:11px; height:11px; border:2px solid; border-radius:3px; }
+    .legend-swatch.missing { border-color:#dc2626; background:#fee2e2; }
+    .legend-swatch.available { border-color:#22c55e; background:#dcfce7; }
+    .box-list { flex:1; }
     .box-card { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; padding:9px 10px; border:1px solid var(--line); border-radius:8px; cursor:pointer; }
     .box-card.active { border-color:#60a5fa; background:#eff6ff; }
+    .box-card.no-corners { border-color:#fca5a5; background:#fff7f7; }
+    .box-card.no-corners.active { border-color:#dc2626; background:#fef2f2; }
+    .box-card.pending { border-style:dashed; border-color:#7dd3fc; }
+    .box-label { min-width:0; }
+    .box-detail { display:block; margin-top:3px; color:var(--muted); font-size:11px; }
+    .result-status { display:inline-flex; align-items:center; gap:5px; margin-left:7px; padding:2px 7px; border-radius:999px; background:#ecfdf5; color:#15803d; font-size:11px; font-weight:700; white-space:nowrap; }
+    .result-status[data-state="pending"] { background:#e0f2fe; color:#0369a1; }
+    .result-status[data-state="review"] { background:#fff7ed; color:#c2410c; }
+    .result-status[data-state="missing"] { background:#fee2e2; color:#b91c1c; }
+    .result-status[data-state="incomplete"] { background:#fef3c7; color:#92400e; }
+    .result-status[data-state="manual"] { background:#f1f5f9; color:#475569; }
+    .result-status[data-state="processing"] { background:#fef3c7; color:#92400e; }
     .box-card.processing { border-color:#f59e0b; background:#fffbeb; box-shadow:0 0 0 2px #f59e0b33; }
     .box-card.processing.active { border-color:#d97706; background:#fef3c7; }
     .processing-status { display:inline-flex; align-items:center; gap:5px; color:#b45309; font-weight:700; white-space:nowrap; }
@@ -58,6 +75,8 @@
     .box-actions { display:flex; flex-shrink:0; align-items:center; gap:8px; }
     .box-card button { border:0; background:transparent; color:var(--red); font-size:12px; }
     .box-card button.refine { color:#1d4ed8; }
+    .box-card button.accept { color:#0369a1; }
+    .box-card button.dismiss { color:#64748b; }
     .box-card button:disabled { cursor:not-allowed; opacity:.5; }
     .empty { margin:auto; padding:24px; color:#94a3b8; text-align:center; }
     .toast { position:fixed; bottom:16px; left:50%; z-index:5; transform:translateX(-50%); padding:9px 13px; border-radius:8px; background:#166534; color:white; box-shadow:0 5px 18px #0f172a33; opacity:0; pointer-events:none; transition:opacity .2s; }
@@ -68,7 +87,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><h1>棋盘格手动画框</h1><div class="subtitle">当前项目：生产项目　·　数据目录：data</div></div>
+    <div class="brand"><h1>棋盘格自动检测与复核</h1><div class="subtitle">当前项目：生产项目　·　数据目录：data</div></div>
     <div class="summary" id="summary">正在读取本目录的图片…</div>
     <div class="actions">
       <label class="secondary" for="uploadInput">上传图片</label>
@@ -91,31 +110,83 @@
         </div>
       </div>
       <div class="image-scroller" id="imageScroller"><div class="empty">从左侧选择一张照片</div></div>
-      <div class="caption" id="caption">框在棋盘内部几格；自动检测完整9×12格棋盘并校验黑白交替，旋转方向也支持。</div>
+      <div class="caption" id="caption">滚轮缩放；按住空格并拖动平移；左键拖动可手动补框。</div>
     </section>
     <aside class="panel box-panel">
-      <div class="panel-heading"><span>本图的框</span><span id="boxCount" class="meta">0 块</span></div>
-      <div class="box-toolbar">
-        <label class="auto-fit-toggle"><input id="refineOnDraw" type="checkbox" checked>画完自动贴合</label>
-        <button id="undoButton" type="button" title="撤销最后画的框">撤销一个</button>
-        <button class="delete" id="deleteButton" type="button" title="删除选中的框">删除选中</button>
-        <button class="delete" id="clearButton" type="button" title="清除此图所有框">清空本图</button>
+      <div class="panel-heading"><span>棋盘格结果</span><span id="boxCount" class="meta">0 块</span></div>
+      <div class="detect-toolbar">
+        <button class="primary" id="detectButton" type="button">自动检测本图</button>
+        <div id="detectionStatus" class="meta" role="status" aria-live="polite">检测结果会显示在下方列表</div>
+        <div class="corner-legend"><span><i class="legend-swatch missing"></i>红框：仅区域框选</span><span><i class="legend-swatch available"></i>绿/橙框：有角点数据</span></div>
+        <div id="cornerSummary" class="meta" aria-live="polite"></div>
       </div>
-      <div class="box-list" id="boxList"><div class="empty">在照片上拖动鼠标来画框</div></div>
+      <div class="box-list" id="boxList"><div class="empty">点击“自动检测本图”，或拖动鼠标补框</div></div>
     </aside>
   </main>
   <div class="toast" id="toast"></div>
   <script>
-    const state = { images: [], current: -1, boxes: {}, imageSizes: {}, dirtyNames: new Set(), savingNames: new Map(), selected: -1, naturalWidth: 0, naturalHeight: 0, fitWidth: 0, displayWidth: 0, saveTimer: 0, drawing: null, refining: null };
+    const state = { images: [], current: -1, boxes: {}, imageSizes: {}, dirtyNames: new Set(), savingNames: new Map(), selected: -1, naturalWidth: 0, naturalHeight: 0, fitWidth: 0, displayWidth: 0, saveTimer: 0, drawing: null, panning: null, spaceDown:false, refining: null, detecting: null, proposals: {}, detectionInfo: {}, proposalSelected: -1 };
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
     const image = () => state.images[state.current];
     const boxes = () => image() ? (state.boxes[image().name] || []) : [];
+    const proposals = () => image() ? (state.proposals[image().name] || []) : [];
+    const hasCornerPairs = (box) => Array.isArray(box?.corners) && Array.isArray(box?.grid_indices) && box.corners.length > 0 && box.corners.length === box.grid_indices.length;
+    const busy = () => Boolean(state.detecting || state.refining);
     const isRefiningBox = (name, box) => Boolean(state.refining && state.refining.name === name && state.refining.box === box);
     const boxPoints = (box) => box.points || [
       { x:box.x, y:box.y }, { x:box.x + box.w, y:box.y },
       { x:box.x + box.w, y:box.y + box.h }, { x:box.x, y:box.y + box.h }
     ];
+
+    function resultEntries() {
+      const saved = deduplicateSaved(boxes());
+      const pending = [];
+      for (const candidate of proposals()) {
+        if (saved.some((box) => sameBoard(candidate, box))) continue;
+        const duplicateIndex = pending.findIndex((box) => sameBoard(candidate, box));
+        if (duplicateIndex < 0) pending.push(candidate);
+        else {
+          const old = pending[duplicateIndex];
+          if ((candidate.corners?.length || 0) + (candidate.confidence || 0) > (old.corners?.length || 0) + (old.confidence || 0)) pending[duplicateIndex] = candidate;
+        }
+      }
+      return [
+        ...saved.map((box) => ({ box, saved:true, index:boxes().indexOf(box) })),
+        ...pending.map((box) => ({ box, saved:false, index:proposals().indexOf(box) }))
+      ];
+    }
+
+    function deduplicateSaved(items) {
+      const unique = [];
+      const score = (box) => (box.corners?.length || 0) * 100 + (box.confidence || 0) * 10 + (box.points ? 1 : 0);
+      for (const box of items) {
+        const index = unique.findIndex((old) => sameBoard(box, old));
+        if (index < 0) unique.push(box);
+        else if (score(box) > score(unique[index])) unique[index] = box;
+      }
+      return unique;
+    }
+
+    function resultStatus(box, saved, processing) {
+      if (processing) return ["processing", "正在贴合"];
+      if (!hasCornerPairs(box)) return ["missing", "无角点数据"];
+      if (box.partial) return ["incomplete", "不完整"];
+      if (box.needs_review) return ["review", "需复核"];
+      if (!saved) return ["pending", "待确认"];
+      if (!box.points) return ["manual", "待贴合"];
+      return ["saved", "已保存"];
+    }
+
+    function normalizeSavedBoxes() {
+      for (const [name, current] of Object.entries(state.boxes)) {
+        const unique = deduplicateSaved(current);
+        if (unique.length !== current.length) {
+          state.boxes[name] = unique;
+          markDirty(name);
+        }
+      }
+    }
 
     async function request(url, options) {
       const response = await fetch(url, options);
@@ -125,22 +196,27 @@
     }
 
     function updateSummary() {
-      const count = Object.values(state.boxes).reduce((sum, items) => sum + items.length, 0);
+      const allBoxes = Object.values(state.boxes).flat();
+      const count = allBoxes.length;
+      const withCorners = allBoxes.filter(hasCornerPairs).length;
+      const withoutCorners = count - withCorners;
       const saving = state.savingNames.size > 0;
-      $("summary").textContent = "生产项目/data · " + state.images.length + " 张照片 · 已画 " + count + " 个棋盘框 · " + (saving ? "正在保存…" : state.dirtyNames.size ? "等待保存" : "已保存");
+      $("summary").textContent = "生产项目/data · " + state.images.length + " 张照片 · 已保存 " + count + " 个棋盘框 · " + (saving ? "正在保存…" : state.dirtyNames.size ? "等待保存" : "已保存");
       $("imageCount").textContent = state.images.length + " 张";
-      $("boxCount").textContent = boxes().length + " 块";
+      $("boxCount").textContent = resultEntries().length + " 块";
+      $("cornerSummary").textContent = "全部照片：红框 " + withoutCorners + " 块无角点数据 · 有角点 " + withCorners + " 块";
       const currentImage = image();
-      const currentBoxes = boxes();
-      const lastBox = currentBoxes[currentBoxes.length - 1];
-      $("undoButton").disabled = !lastBox || isRefiningBox(currentImage?.name, lastBox);
-      $("deleteButton").disabled = state.selected < 0 || !currentBoxes[state.selected] || isRefiningBox(currentImage?.name, currentBoxes[state.selected]);
-      const currentImageHasRefiningBox = currentImage && currentBoxes.some((box) => isRefiningBox(currentImage.name, box));
-      $("clearButton").disabled = !currentBoxes.length || currentImageHasRefiningBox;
-      $("clearButton").title = currentImageHasRefiningBox ? "有棋盘格正在贴合，完成后可清空" : "清除此图所有框";
-      $("caption").textContent = $("refineOnDraw").checked
-        ? "框在棋盘内部几格；自动检测完整9×12格棋盘并校验黑白交替，旋转方向也支持。"
-        : "只保存你拖出的矩形框；每张照片可以画多个框。";
+      $("detectButton").disabled = !currentImage || !state.naturalWidth || busy();
+      $("detectButton").textContent = state.detecting ? "正在检测…" : "自动检测本图";
+      $("detectButton").setAttribute("aria-busy", String(Boolean(state.detecting)));
+      $("uploadInput").disabled = busy();
+      const info = currentImage ? state.detectionInfo[currentImage.name] : null;
+      $("detectionStatus").textContent = state.detecting === currentImage?.name
+        ? "正在扫描整张照片、定位棋盘角点…"
+        : info ? "本次检测 " + info.count + " 块 · 不完整 " + info.partial + " 块 · " + info.seconds + " 秒" + (info.limited ? " · 候选过多，已限制搜索范围" : "")
+        : "检测结果会显示在下方列表";
+      $("currentSummary").textContent = resultEntries().length + " 个棋盘格结果";
+      $("caption").textContent = "滚轮缩放；按住空格并拖动平移；左键拖动可手动补框。";
     }
 
     function renderPhotoList() {
@@ -164,29 +240,47 @@
     function renderBoxes() {
       const list = $("boxList");
       list.innerHTML = "";
-      if (!boxes().length) {
-        list.innerHTML = '<div class="empty">在照片上拖动鼠标来画框</div>';
+      const entries = resultEntries();
+      if (!entries.length) {
+        list.innerHTML = '<div class="empty">点击“自动检测本图”，或拖动鼠标补框</div>';
       } else {
-        boxes().forEach((box, index) => {
+        entries.forEach((entry, displayIndex) => {
+          const { box, saved, index } = entry;
           const item = document.createElement("div");
-          const processing = isRefiningBox(image()?.name, box);
-          item.className = "box-card" + (index === state.selected ? " active" : "") + (processing ? " processing" : "");
-          const kind = box.points ? "已贴合" : "矩形";
-          const size = box.detected_squares ? " · 匹配 " + box.detected_squares[0] + "×" + box.detected_squares[1] : "";
-          const status = processing ? ' <span class="processing-status"><span class="processing-spinner" aria-hidden="true"></span>正在贴合…</span>' : ' · ' + kind + size;
-          item.innerHTML = '<span>棋盘格 ' + String(index + 1).padStart(2, "0") + status + '</span><div class="box-actions"><button class="refine" type="button" aria-label="重新贴合此框">重新贴合</button><button type="button" aria-label="删除此框">删除</button></div>';
-          item.addEventListener("click", () => { state.selected = index; renderAll(); });
-          item.querySelector(".refine").disabled = Boolean(state.refining);
-          item.querySelector(".refine").addEventListener("click", (event) => {
-            event.stopPropagation();
-            state.selected = index;
+          const missingCorners = !hasCornerPairs(box);
+          const processing = saved && isRefiningBox(image()?.name, box);
+          const selected = saved ? index === state.selected : index === state.proposalSelected;
+          const [stateName, stateLabel] = resultStatus(box, saved, processing);
+          const detail = missingCorners ? "仅区域框选 · 无角点和网格坐标" : box.corners.length + " 个角点" + (box.detected_squares ? " · 棋盘 " + box.detected_squares[0] + "×" + box.detected_squares[1] + " 格" : "");
+          item.className = "box-card" + (selected ? " active" : "") + (!saved ? " pending" : "") + (processing ? " processing" : "") + (missingCorners ? " no-corners" : "");
+          const actions = saved
+            ? '<button class="refine" type="button" aria-label="重新贴合此框">重新贴合</button><button class="remove" type="button" aria-label="删除此框">删除</button>'
+            : '<button class="accept" type="button" aria-label="保留此检测结果">保留</button><button class="dismiss" type="button" aria-label="忽略此检测结果">忽略</button>';
+          item.innerHTML = '<span class="box-label"><strong>棋盘格 ' + String(displayIndex + 1).padStart(2, "0") + '</strong><span class="result-status" data-state="' + stateName + '">' + (processing ? '<span class="processing-spinner" aria-hidden="true"></span>' : '') + stateLabel + '</span>' + (detail ? '<small class="box-detail">' + detail + '</small>' : '') + '</span><div class="box-actions">' + actions + '</div>';
+          item.addEventListener("click", () => {
+            if (saved) { state.selected = index; state.proposalSelected = -1; }
+            else { state.selected = -1; state.proposalSelected = index; }
             renderAll();
-            refineBox(index);
           });
-          const deleteButton = item.querySelector(".box-actions button:last-child");
-          deleteButton.disabled = processing;
-          deleteButton.title = processing ? "该框正在贴合，暂时不能删除" : "删除此框";
-          deleteButton.addEventListener("click", (event) => { event.stopPropagation(); removeBox(index); });
+          if (saved) {
+            item.querySelector(".refine").disabled = busy();
+            item.querySelector(".refine").addEventListener("click", (event) => {
+              event.stopPropagation(); state.selected = index; renderAll(); refineBox(index);
+            });
+            const deleteButton = item.querySelector(".remove");
+            deleteButton.disabled = processing;
+            deleteButton.title = processing ? "该框正在贴合，暂时不能删除" : "删除此框";
+            deleteButton.addEventListener("click", (event) => { event.stopPropagation(); removeBox(index); });
+          } else {
+            item.querySelector(".accept").disabled = busy();
+            item.querySelector(".accept").addEventListener("click", (event) => { event.stopPropagation(); acceptCandidate(box); });
+            item.querySelector(".dismiss").disabled = busy();
+            item.querySelector(".dismiss").addEventListener("click", (event) => {
+              event.stopPropagation();
+              state.proposals[image().name] = proposals().filter((candidate) => candidate !== box);
+              state.proposalSelected = -1; renderAll();
+            });
+          }
           list.append(item);
         });
       }
@@ -202,15 +296,19 @@
     function selectImage(index) {
       state.current = index;
       state.selected = -1;
+      state.proposalSelected = -1;
+      state.naturalWidth = 0;
+      state.naturalHeight = 0;
       state.drawing = null;
       const item = image();
       $("currentName").textContent = item.name;
-      $("currentSummary").textContent = (state.boxes[item.name] || []).length + " 个手动画框";
+      $("currentSummary").textContent = (state.boxes[item.name] || []).length + " 个已保存框";
       const scroller = $("imageScroller");
       scroller.classList.remove("zoomed");
-      scroller.innerHTML = '<div class="image-wrap" id="imageWrap"><img id="preview" alt="待手动画框的照片"><canvas id="overlay"></canvas></div>';
+      scroller.innerHTML = '<div class="image-wrap" id="imageWrap"><img id="preview" alt="待检测棋盘格的照片"><canvas id="overlay"></canvas></div>';
       const photo = $("preview");
       photo.onload = () => {
+        if (image()?.name !== item.name) return;
         state.naturalWidth = photo.naturalWidth;
         state.naturalHeight = photo.naturalHeight;
         state.imageSizes[item.name] = { width:photo.naturalWidth, height:photo.naturalHeight };
@@ -243,6 +341,25 @@
       drawOverlay();
     }
 
+    function zoomAt(nextWidth, clientX, clientY) {
+      if (!state.fitWidth || !state.displayWidth) return;
+      const scroller = $("imageScroller"), rect = scroller.getBoundingClientRect();
+      const next = Math.max(state.fitWidth, Math.min(state.naturalWidth * 2, nextWidth));
+      const imageRect = $("imageWrap").getBoundingClientRect();
+      const imageX = Math.max(0, Math.min(1, (clientX - imageRect.left) / imageRect.width));
+      const imageY = Math.max(0, Math.min(1, (clientY - imageRect.top) / imageRect.height));
+      state.displayWidth = next;
+      applyImageSize();
+      if (next > state.fitWidth + 1) {
+        scroller.scrollLeft = Math.max(0, 12 + imageX * next - (clientX - rect.left - scroller.clientLeft));
+        const nextHeight = next * state.naturalHeight / state.naturalWidth;
+        scroller.scrollTop = Math.max(0, 12 + imageY * nextHeight - (clientY - rect.top - scroller.clientTop));
+      } else {
+        scroller.scrollLeft = 0;
+        scroller.scrollTop = 0;
+      }
+    }
+
     function drawOverlay() {
       const canvas = $("overlay");
       if (!canvas || !state.naturalWidth) return;
@@ -255,9 +372,10 @@
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
       ctx.clearRect(0, 0, rect.width, rect.height);
       boxes().forEach((box, index) => {
+        const missingCorners = !hasCornerPairs(box);
         const points = boxPoints(box).map((point) => ({ x:point.x * rect.width, y:point.y * rect.height }));
-        ctx.fillStyle = index === state.selected ? "rgba(37,99,235,.17)" : "rgba(34,197,94,.12)";
-        ctx.strokeStyle = index === state.selected ? "#60a5fa" : "#22c55e";
+        ctx.fillStyle = missingCorners ? "rgba(239,68,68,.14)" : index === state.selected ? "rgba(37,99,235,.17)" : "rgba(34,197,94,.12)";
+        ctx.strokeStyle = missingCorners ? "#dc2626" : index === state.selected ? "#60a5fa" : box.needs_review ? "#f59e0b" : "#22c55e";
         ctx.lineWidth = index === state.selected ? 3 : 2;
         ctx.beginPath();
         ctx.moveTo(points[0].x, points[0].y);
@@ -265,9 +383,26 @@
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
-        ctx.fillStyle = index === state.selected ? "#1d4ed8" : "#15803d";
+        ctx.fillStyle = missingCorners ? "#b91c1c" : index === state.selected ? "#1d4ed8" : "#15803d";
         ctx.font = "bold 14px -apple-system, BlinkMacSystemFont, sans-serif";
         ctx.fillText(String(index + 1), points[0].x + 5, Math.max(16, points[0].y + 18));
+        if (index === state.selected) drawCorners(ctx, box, rect);
+      });
+      resultEntries().filter((entry) => !entry.saved).forEach((entry, index) => {
+        const box = entry.box;
+        const points = boxPoints(box).map((point) => ({ x:point.x * rect.width, y:point.y * rect.height }));
+        ctx.strokeStyle = box.needs_review ? "#f59e0b" : "#38bdf8";
+        ctx.lineWidth = entry.index === state.proposalSelected ? 3 : 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
+        ctx.closePath();
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = box.needs_review ? "#fbbf24" : "#7dd3fc";
+        ctx.fillText("A" + (index + 1), points[0].x + 4, Math.max(14, points[0].y - 5));
+        if (entry.index === state.proposalSelected) drawCorners(ctx, box, rect);
       });
       if (state.drawing) {
         const x = Math.min(state.drawing.x0, state.drawing.x1);
@@ -284,19 +419,109 @@
       }
     }
 
+    function drawCorners(ctx, box, rect) {
+      ctx.fillStyle = "#fef08a";
+      (box.corners || []).forEach(([x, y]) => {
+        ctx.beginPath(); ctx.arc(x * rect.width, y * rect.height, 2, 0, Math.PI * 2); ctx.fill();
+      });
+    }
+
+    function signedArea(points) {
+      return points.reduce((sum, p, i) => { const q = points[(i + 1) % points.length]; return sum + p.x * q.y - p.y * q.x; }, 0) / 2;
+    }
+
+    function sameBoard(first, second) {
+      const a = boxPoints(first), b = boxPoints(second);
+      let output = a.slice();
+      const orientation = signedArea(b) >= 0 ? 1 : -1;
+      const cross = (u, v, p) => (v.x - u.x) * (p.y - u.y) - (v.y - u.y) * (p.x - u.x);
+      for (let i = 0; i < b.length && output.length; i += 1) {
+        const u = b[i], v = b[(i + 1) % b.length], input = output;
+        output = [];
+        let previous = input[input.length - 1], previousCross = cross(u, v, previous);
+        for (const point of input) {
+          const pointCross = cross(u, v, point);
+          const inside = pointCross * orientation >= -1e-12;
+          const previousInside = previousCross * orientation >= -1e-12;
+          if (inside !== previousInside) {
+            const fraction = previousCross / (previousCross - pointCross);
+            output.push({ x:previous.x + fraction * (point.x - previous.x), y:previous.y + fraction * (point.y - previous.y) });
+          }
+          if (inside) output.push(point);
+          previous = point; previousCross = pointCross;
+        }
+      }
+      return Math.abs(signedArea(output)) / Math.max(1e-12, Math.min(Math.abs(signedArea(a)), Math.abs(signedArea(b)))) > 0.45;
+    }
+
+    function acceptCandidate(candidate) {
+      if (!image() || busy()) return;
+      const name = image().name, current = state.boxes[name] || [];
+      let index = current.findIndex((old) => sameBoard(candidate, old));
+      if (index < 0) {
+        current.push(candidate);
+        index = current.length - 1;
+      } else if ((candidate.corners?.length || 0) > (current[index].corners?.length || 0)) {
+        current[index] = candidate;
+      }
+      state.boxes[name] = current;
+      state.proposals[name] = proposals().filter((old) => old !== candidate);
+      state.selected = index;
+      state.proposalSelected = -1;
+      markDirty(name);
+      renderAll();
+      showToast("检测结果已加入棋盘格列表");
+    }
+
+    $("detectButton").addEventListener("click", async () => {
+      const name = image()?.name;
+      if (!name || busy()) return;
+      state.detecting = name;
+      state.drawing = null;
+      renderAll();
+      try {
+        const result = await request("/api/detect", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ name }) });
+        state.proposals[name] = result.boxes || [];
+        state.imageSizes[name] = { width:result.image_width, height:result.image_height };
+        state.detectionInfo[name] = { count:result.boxes.length, partial:result.boxes.filter((box) => box.partial).length, seconds:result.elapsed_seconds, limited:result.limited };
+        state.proposalSelected = -1;
+        renderAll();
+        showToast(result.boxes.length ? "检测完成，结果已合并到棋盘格列表" : "没有找到可靠棋盘，可以手动框选可见网格重试", !result.boxes.length);
+      } catch (error) {
+        showToast("自动检测失败：" + error.message, true);
+      } finally {
+        state.detecting = null;
+        renderAll();
+      }
+    });
+
     function pointerPoint(event) {
       const rect = $("overlay").getBoundingClientRect();
       return { x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) };
     }
 
     $("imageScroller").addEventListener("pointerdown", (event) => {
-      if (event.target.id !== "overlay" || !image()) return;
+      if (!image() || state.detecting) return;
+      if (state.spaceDown && event.button === 0) {
+        state.panning = { pointerId:event.pointerId, x:event.clientX, y:event.clientY, left:$("imageScroller").scrollLeft, top:$("imageScroller").scrollTop };
+        $("imageScroller").classList.add("panning");
+        event.target.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        return;
+      }
+      if (event.target.id !== "overlay" || event.button !== 0) return;
       const point = pointerPoint(event);
       state.drawing = { x0: point.x, y0: point.y, x1: point.x, y1: point.y };
       event.target.setPointerCapture(event.pointerId);
       drawOverlay();
     });
     $("imageScroller").addEventListener("pointermove", (event) => {
+      if (state.panning?.pointerId === event.pointerId) {
+        const scroller = $("imageScroller"), drag = state.panning;
+        scroller.scrollLeft = drag.left - (event.clientX - drag.x);
+        scroller.scrollTop = drag.top - (event.clientY - drag.y);
+        return;
+      }
       if (event.target.id !== "overlay") return;
       const point = pointerPoint(event);
       if (!state.drawing) return;
@@ -305,6 +530,11 @@
       drawOverlay();
     });
     $("imageScroller").addEventListener("pointerup", (event) => {
+      if (state.panning?.pointerId === event.pointerId) {
+        state.panning = null;
+        $("imageScroller").classList.remove("panning");
+        return;
+      }
       if (!state.drawing || event.target.id !== "overlay") return;
       const d = state.drawing;
       const x = Math.min(d.x0, d.x1), y = Math.min(d.y0, d.y1);
@@ -314,15 +544,20 @@
         drawOverlay();
         return;
       }
-      const list = boxes();
-      list.push({ x:x, y:y, w:w, h:h });
-      state.boxes[image().name] = list;
-      state.selected = list.length - 1;
+      const name = image().name, list = boxes();
+      const box = { x:x, y:y, w:w, h:h };
+      list.push(box);
+      state.boxes[name] = deduplicateSaved(list);
+      state.selected = state.boxes[name].indexOf(box);
+      if (state.selected < 0) state.selected = state.boxes[name].length - 1;
       markDirty();
       renderAll();
-      if ($("refineOnDraw").checked) refineBox(state.selected);
+      refineBox(state.selected);
     });
-    $("imageScroller").addEventListener("pointercancel", () => { state.drawing = null; drawOverlay(); });
+    $("imageScroller").addEventListener("pointercancel", () => {
+      if (state.panning) { state.panning = null; $("imageScroller").classList.remove("panning"); }
+      state.drawing = null; drawOverlay();
+    });
 
     function removeBox(index) {
       const list = boxes();
@@ -337,17 +572,14 @@
       renderAll();
     }
 
-    $("undoButton").addEventListener("click", () => removeBox(boxes().length - 1));
-    $("deleteButton").addEventListener("click", () => removeBox(state.selected));
-    $("refineOnDraw").addEventListener("change", updateSummary);
     async function refineBox(index) {
       const currentImage = image();
       const name = currentImage?.name;
       const box = name ? (state.boxes[name] || [])[index] : null;
-      if (!name || !box || state.refining) return;
+      if (!name || !box || busy()) return;
       const seedPoints = box.seed_points || boxPoints(box);
       state.refining = { name, box };
-      renderBoxes();
+      renderAll();
       try {
         const result = await request("/api/refine", {
           method:"POST",
@@ -355,38 +587,56 @@
           body:JSON.stringify({ name:name, points:seedPoints })
         });
         if (!(state.boxes[name] || []).includes(box)) return;
-        box.points = result.points;
+        Object.assign(box, result);
+        delete box.ok;
         box.seed_points = result.seed_points || seedPoints;
-        box.detected_squares = result.detected_squares;
         delete box.x;
         delete box.y;
         delete box.w;
         delete box.h;
+        state.boxes[name] = deduplicateSaved(state.boxes[name] || []);
+        state.selected = state.boxes[name].indexOf(box);
         markDirty(name);
         renderAll();
-        showToast("已自动贴合 " + result.detected_squares[0] + "×" + result.detected_squares[1] + " 格棋盘");
+        showToast("已贴合" + (result.partial ? "局部棋盘，建议放大复核" : "完整棋盘") + " · " + result.corners.length + " 个角点");
       } catch (error) {
         showToast(error.message + "，原框已保留。", true);
       } finally {
         state.refining = null;
-        renderBoxes();
+        renderAll();
       }
     }
-    $("clearButton").addEventListener("click", () => {
-      if (!image() || !boxes().length || boxes().some((box) => isRefiningBox(image().name, box))) return;
-      state.boxes[image().name] = [];
-      state.selected = -1;
-      markDirty();
-      renderAll();
-    });
-    $("zoomIn").addEventListener("click", () => { if (state.fitWidth) { state.displayWidth = Math.min(state.naturalWidth * 2, state.displayWidth * 1.25); applyImageSize(); } });
-    $("zoomOut").addEventListener("click", () => { if (state.fitWidth) { state.displayWidth = Math.max(state.fitWidth * .45, state.displayWidth / 1.25); applyImageSize(); } });
+    $("zoomIn").addEventListener("click", () => { if (state.fitWidth) { const rect = $("imageScroller").getBoundingClientRect(); zoomAt(state.displayWidth * 1.25, rect.left + rect.width / 2, rect.top + rect.height / 2); } });
+    $("zoomOut").addEventListener("click", () => { if (state.fitWidth) { const rect = $("imageScroller").getBoundingClientRect(); zoomAt(state.displayWidth / 1.25, rect.left + rect.width / 2, rect.top + rect.height / 2); } });
     $("zoomFit").addEventListener("click", fitImage);
+    $("imageScroller").addEventListener("wheel", (event) => {
+      if (!state.fitWidth || !state.displayWidth || !image()) return;
+      event.preventDefault();
+      zoomAt(state.displayWidth * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
+    }, { passive:false });
+    window.addEventListener("keydown", (event) => {
+      if (event.code === "Space" && !event.repeat && !["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(document.activeElement?.tagName)) {
+        state.spaceDown = true;
+        $("imageScroller").classList.add("pan-ready");
+        event.preventDefault();
+      }
+    });
+    window.addEventListener("keyup", (event) => {
+      if (event.code === "Space") {
+        state.spaceDown = false;
+        $("imageScroller").classList.remove("pan-ready", "panning");
+        state.panning = null;
+      }
+    });
+    window.addEventListener("blur", () => {
+      state.spaceDown = false; state.panning = null;
+      $("imageScroller").classList.remove("pan-ready", "panning");
+    });
     window.addEventListener("resize", () => { if (image()) fitImage(); });
     window.addEventListener("keydown", (event) => {
       if (!state.images.length) return;
-      if (event.key === "ArrowLeft") selectImage(Math.max(0, state.current - 1));
-      if (event.key === "ArrowRight") selectImage(Math.min(state.images.length - 1, state.current + 1));
+      if (event.key === "ArrowLeft" && !state.spaceDown) selectImage(Math.max(0, state.current - 1));
+      if (event.key === "ArrowRight" && !state.spaceDown) selectImage(Math.min(state.images.length - 1, state.current + 1));
       if ((event.key === "Delete" || event.key === "Backspace") && state.selected >= 0) removeBox(state.selected);
       if (event.key === "Escape") { state.drawing = null; drawOverlay(); }
     });
@@ -396,7 +646,9 @@
       state.dirtyNames.add(name);
       updateSummary();
       clearTimeout(state.saveTimer);
-      state.saveTimer = setTimeout(() => saveBoxes(name).catch(() => {}), 350);
+      state.saveTimer = setTimeout(() => {
+        Promise.all(Array.from(state.dirtyNames).map((dirtyName) => saveBoxes(dirtyName))).catch(() => {});
+      }, 350);
     }
 
     async function saveBoxes(name) {
@@ -445,6 +697,12 @@
       event.target.value = "";
       if (!files.length) return;
       const previousName = image()?.name;
+      try {
+        await Promise.all(Array.from(state.dirtyNames).map((name) => saveBoxes(name)));
+      } catch (_) {
+        showToast("标注尚未保存，上传已暂停；请确认本机网页服务正常后重试。", true);
+        return;
+      }
       let uploaded = 0;
       const failures = [];
       for (let index = 0; index < files.length; index += 1) {
@@ -466,6 +724,7 @@
         state.images = data.images || [];
         state.boxes = data.boxes || {};
         state.imageSizes = data.image_sizes || {};
+        normalizeSavedBoxes();
         renderAll();
         const selectedIndex = state.images.findIndex((item) => item.name === previousName);
         if (selectedIndex >= 0) selectImage(selectedIndex);
@@ -493,6 +752,7 @@
         state.images = data.images;
         state.boxes = data.boxes || {};
         state.imageSizes = data.image_sizes || {};
+        normalizeSavedBoxes();
         $("summary").textContent = state.images.length + " 张照片 · 框选会自动保存到本机";
         renderAll();
         if (state.images.length) selectImage(0);

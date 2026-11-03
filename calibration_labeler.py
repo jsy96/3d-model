@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve a local, manual checkerboard-box annotation page."""
+"""Serve a local checkerboard detection and annotation page."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ PORT = 8765
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 SAVE_LOCK = threading.Lock()
-BOARD_INNER_CORNER_SIZES = ((8, 11), (11, 8))
 
 
 def list_images() -> list[Path]:
@@ -113,8 +112,8 @@ def validate_boxes(boxes: object) -> list[dict]:
         if not isinstance(box, dict):
             raise ValueError("框选数据格式不正确。")
         if isinstance(box.get("points"), list):
-            if len(box["points"]) != 4:
-                raise ValueError("四边形必须包含四个顶点。")
+            if not 3 <= len(box["points"]) <= 8:
+                raise ValueError("棋盘轮廓必须包含 3 到 8 个顶点。")
             points = []
             for point in box["points"]:
                 if not isinstance(point, dict):
@@ -129,8 +128,8 @@ def validate_boxes(boxes: object) -> list[dict]:
             item = {"points": points}
             seed_points = box.get("seed_points")
             if seed_points is not None:
-                if not isinstance(seed_points, list) or len(seed_points) != 4:
-                    raise ValueError("原始框选区域必须包含四个顶点。")
+                if not isinstance(seed_points, list) or not 3 <= len(seed_points) <= 8:
+                    raise ValueError("原始框选区域必须包含 3 到 8 个顶点。")
                 validated_seed = []
                 for point in seed_points:
                     if not isinstance(point, dict):
@@ -150,6 +149,31 @@ def validate_boxes(boxes: object) -> list[dict]:
                 and all(isinstance(value, int) and 2 <= value <= 100 for value in detected_squares)
             ):
                 item["detected_squares"] = detected_squares
+            for field in ("partial", "needs_review"):
+                if field in box:
+                    if not isinstance(box[field], bool):
+                        raise ValueError("棋盘检测状态格式不正确。")
+                    item[field] = box[field]
+            if "confidence" in box:
+                try:
+                    value = float(box["confidence"])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("置信度格式不正确。") from exc
+                if not 0 <= value <= 1:
+                    raise ValueError("置信度必须在 0 到 1 之间。")
+                item["confidence"] = value
+            if box.get("source") in ("automatic", "refined"):
+                item["source"] = box["source"]
+            corners, indices = box.get("corners"), box.get("grid_indices")
+            if corners is not None or indices is not None:
+                if not isinstance(corners, list) or not isinstance(indices, list) or not 12 <= len(corners) <= 88 or len(corners) != len(indices):
+                    raise ValueError("角点与网格坐标数量不一致。")
+                for corner, index in zip(corners, indices):
+                    if not isinstance(corner, list) or len(corner) != 2 or any(not isinstance(v, (int, float)) or not 0 <= v <= 1 for v in corner):
+                        raise ValueError("角点坐标格式不正确。")
+                    if not isinstance(index, list) or len(index) != 2 or any(type(v) is not int or not 0 <= v <= 11 for v in index):
+                        raise ValueError("网格坐标格式不正确。")
+                item["corners"], item["grid_indices"] = corners, indices
             validated.append(item)
             continue
         try:
@@ -165,20 +189,30 @@ def validate_boxes(boxes: object) -> list[dict]:
     return validated
 
 
-def refine_checkerboard(image_path: Path, rough_points: object) -> dict:
-    """Find and validate one complete 9x12-square board around a seed region."""
+DETECTION_LOCK = threading.Lock()
+DETECTION_CACHE: dict[tuple, dict] = {}
+
+
+def detect_checkerboards(image_path: Path) -> dict:
     try:
-        import cv2
-        import numpy as np
+        from checkerboard_detector import detect_image
     except ModuleNotFoundError as exc:
         raise RuntimeError(f"缺少图像处理依赖：{exc.name}") from exc
+    stat = image_path.stat()
+    key = (str(image_path.resolve()), stat.st_mtime_ns, stat.st_size)
+    with DETECTION_LOCK:
+        if key not in DETECTION_CACHE:
+            result = detect_image(image_path)
+            while len(DETECTION_CACHE) >= 4:
+                DETECTION_CACHE.pop(next(iter(DETECTION_CACHE)))
+            DETECTION_CACHE[key] = result
+        return DETECTION_CACHE[key]
 
-    if not isinstance(rough_points, list) or len(rough_points) != 4:
+
+def refine_checkerboard(image_path: Path, rough_points: object) -> dict:
+    """Select the automatically detected board containing the original seed."""
+    if not isinstance(rough_points, list) or not 3 <= len(rough_points) <= 8:
         raise ValueError("请先画一个矩形框。")
-    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError("图片无法读取。")
-    image_height, image_width = image.shape[:2]
     points = []
     for point in rough_points:
         if not isinstance(point, dict):
@@ -189,171 +223,48 @@ def refine_checkerboard(image_path: Path, rough_points: object) -> dict:
             raise ValueError("矩形框顶点坐标格式不正确。") from exc
         if not 0 <= x <= 1 or not 0 <= y <= 1:
             raise ValueError("矩形框顶点必须在图片范围内。")
-        points.append((x * image_width, y * image_height))
+        points.append({"x": x, "y": y})
+    result = detect_checkerboards(image_path)
+    import cv2
+    import numpy as np
 
-    seed = np.asarray(points, dtype=np.float32)
-    seed_min = np.min(seed, axis=0)
-    seed_max = np.max(seed, axis=0)
-    seed_center = np.mean(seed, axis=0)
-    seed_width, seed_height = np.maximum(seed_max - seed_min, 16)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    flags = cv2.CALIB_CB_NORMALIZE_IMAGE | cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY
+    center = tuple(np.mean([[p["x"], p["y"]] for p in points], axis=0).tolist())
+    candidates = []
+    for box in result["boxes"]:
+        contour = np.array([[p["x"], p["y"]] for p in box["points"]], np.float32)
+        if cv2.pointPolygonTest(contour, center, False) >= 0:
+            candidates.append(box)
+    if not candidates:
+        # One focused retry retains a useful role for manual seeds when global
+        # thresholding misses a small or poorly lit board. No expansion loop.
+        from checkerboard_detector import find_boards
 
-    def validate_candidate(corners: object, pattern_size: tuple[int, int]) -> dict | None:
-        inner_columns, inner_rows = pattern_size
-        corner_points = np.asarray(corners, dtype=np.float32).reshape((-1, 2))
-        if corner_points.shape[0] != inner_columns * inner_rows:
-            return None
-        grid = np.asarray(
-            [(column, row) for row in range(inner_rows) for column in range(inner_columns)],
-            dtype=np.float32,
-        )
-        homography, _ = cv2.findHomography(grid, corner_points, method=0)
-        if homography is None or not np.isfinite(homography).all():
-            return None
-
-        projected = cv2.perspectiveTransform(grid.reshape((1, -1, 2)), homography).reshape((-1, 2))
-        residuals = np.linalg.norm(projected - corner_points, axis=1)
-        neighbor_steps = []
-        lattice = corner_points.reshape((inner_rows, inner_columns, 2))
-        if inner_columns > 1:
-            neighbor_steps.extend(np.linalg.norm(np.diff(lattice, axis=1), axis=2).reshape(-1).tolist())
-        if inner_rows > 1:
-            neighbor_steps.extend(np.linalg.norm(np.diff(lattice, axis=0), axis=2).reshape(-1).tolist())
-        pitch = float(np.median(neighbor_steps)) if neighbor_steps else 0.0
-        if pitch <= 1 or float(np.median(residuals)) / pitch > 0.18:
-            return None
-
-        outer_grid = np.asarray(
-            [
-                [-1, -1],
-                [inner_columns, -1],
-                [inner_columns, inner_rows],
-                [-1, inner_rows],
-            ],
-            dtype=np.float32,
-        ).reshape((1, 4, 2))
-        quad = cv2.perspectiveTransform(outer_grid, homography).reshape((4, 2))
-        if not np.isfinite(quad).all():
-            return None
-        if (
-            np.any(quad[:, 0] < 0)
-            or np.any(quad[:, 0] >= image_width)
-            or np.any(quad[:, 1] < 0)
-            or np.any(quad[:, 1] >= image_height)
-        ):
-            return None
-        edges = np.roll(quad, -1, axis=0) - quad
-        turns = edges[:, 0] * np.roll(edges[:, 1], -1) - edges[:, 1] * np.roll(edges[:, 0], -1)
-        if not (np.all(turns > 0) or np.all(turns < 0)):
-            return None
-        contour = quad.reshape((-1, 1, 2))
-        if abs(float(cv2.contourArea(contour))) < pitch * pitch * 8:
-            return None
-        margin = float(cv2.pointPolygonTest(contour, (float(seed_center[0]), float(seed_center[1])), True))
-        if margin < 0:
-            return None
-
-        # Check the alternating light/dark square centers across the complete board.
-        cell_centers = np.asarray(
-            [
-                (column - 0.5, row - 0.5)
-                for row in range(inner_rows + 1)
-                for column in range(inner_columns + 1)
-            ],
-            dtype=np.float32,
-        )
-        offsets = np.asarray(
-            [(-0.12, -0.12), (-0.12, 0.0), (-0.12, 0.12),
-             (0.0, -0.12), (0.0, 0.0), (0.0, 0.12),
-             (0.12, -0.12), (0.12, 0.0), (0.12, 0.12)],
-            dtype=np.float32,
-        )
-        sample_grid = cell_centers[:, None, :] + offsets[None, :, :]
-        sample_image = cv2.perspectiveTransform(sample_grid.reshape((1, -1, 2)), homography).reshape((-1, 9, 2))
-        sample_xy = np.rint(sample_image).astype(np.int32)
-        if (
-            np.any(sample_xy[:, :, 0] < 0)
-            or np.any(sample_xy[:, :, 0] >= image_width)
-            or np.any(sample_xy[:, :, 1] < 0)
-            or np.any(sample_xy[:, :, 1] >= image_height)
-        ):
-            return None
-        cell_values = np.median(gray[sample_xy[:, :, 1], sample_xy[:, :, 0]], axis=1)
-        parity = np.asarray(
-            [((column + row) % 2) == 0 for row in range(inner_rows + 1) for column in range(inner_columns + 1)],
-            dtype=bool,
-        )
-        parity_a = float(np.median(cell_values[parity]))
-        parity_b = float(np.median(cell_values[~parity]))
-        contrast = abs(parity_a - parity_b)
-        if contrast < 28:
-            return None
-        midpoint = (parity_a + parity_b) / 2.0
-        if parity_a < parity_b:
-            consistency = (float(np.mean(cell_values[parity] < midpoint)) + float(np.mean(cell_values[~parity] > midpoint))) / 2
-        else:
-            consistency = (float(np.mean(cell_values[parity] > midpoint)) + float(np.mean(cell_values[~parity] < midpoint))) / 2
-        if consistency < 0.72:
-            return None
-
-        quality = consistency + min(contrast / 160.0, 1.0) * 0.25 + min(margin / max(pitch, 1.0), 3.0) * 0.03
-        quality -= float(np.median(residuals)) / pitch
-        return {
-            "quad": quad,
-            "squares": (inner_columns + 1, inner_rows + 1),
-            "quality": quality,
-        }
-
-    best = None
-    seen_regions: set[tuple[int, int, int, int]] = set()
-    for expansion in (1.25, 1.5, 2.0, 2.75, 3.75, 5.0, 6.75, 9.0, 12.0, 16.0, 22.0, 32.0):
-        half_width = max(float(seed_width) * expansion / 2, 48)
-        half_height = max(float(seed_height) * expansion / 2, 48)
-        x0 = max(0, int(np.floor(seed_center[0] - half_width)))
-        y0 = max(0, int(np.floor(seed_center[1] - half_height)))
-        x1 = min(image_width, int(np.ceil(seed_center[0] + half_width)))
-        y1 = min(image_height, int(np.ceil(seed_center[1] + half_height)))
-        region = (x0, y0, x1, y1)
-        if region in seen_regions or x1 - x0 < 100 or y1 - y0 < 100:
-            continue
-        seen_regions.add(region)
-        crop = gray[y0:y1, x0:x1]
-        candidates = []
-        for pattern_size in BOARD_INNER_CORNER_SIZES:
-            try:
-                found, corners = cv2.findChessboardCornersSB(crop, pattern_size, flags)
-            except cv2.error:
+        gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        height, width = gray.shape
+        seed = np.array([[p["x"] * width, p["y"] * height] for p in points])
+        half_size = np.maximum(np.ptp(seed, axis=0) * 2, [width * 0.18, height * 0.18])
+        pixel_center = np.array(center) * [width, height]
+        x0, y0 = np.maximum(pixel_center - half_size, 0).astype(int)
+        x1, y1 = np.minimum(pixel_center + half_size, [width, height]).astype(int)
+        local_result = find_boards(gray[y0:y1, x0:x1])
+        for local_box in local_result["boxes"]:
+            contour = np.array([[p["x"], p["y"]] for p in local_box["points"]], np.float32)
+            contour = (contour * [x1 - x0, y1 - y0] + [x0, y0]) / [width, height]
+            if cv2.pointPolygonTest(contour.astype(np.float32), center, False) < 0:
                 continue
-            if not found or corners is None:
-                continue
-            full_image_corners = np.asarray(corners, dtype=np.float32).reshape((-1, 2))
-            full_image_corners += np.asarray([x0, y0], dtype=np.float32)
-            candidate = validate_candidate(full_image_corners, pattern_size)
-            if candidate is not None:
-                candidates.append(candidate)
-        if candidates:
-            candidates.sort(key=lambda item: item["quality"], reverse=True)
-            best = candidates[0]
-            break
-
-    if best is None:
-        raise ValueError(
-            "没有找到通过完整尺寸和黑白格校验的 9×12 棋盘。"
-            "请确认棋盘完整出现在画面中，并把框画在目标棋盘内部几格。"
-        )
-
-    normalized = best["quad"] / np.asarray([image_width, image_height], dtype=np.float32)
-    normalized_seed = seed / np.asarray([image_width, image_height], dtype=np.float32)
-    return {
-        "points": [{"x": float(x), "y": float(y)} for x, y in normalized],
-        "seed_points": [{"x": float(x), "y": float(y)} for x, y in normalized_seed],
-        "detected_squares": list(best["squares"]),
-    }
+            candidates.append({
+                **local_box,
+                "points": [{"x": float(x), "y": float(y)} for x, y in contour],
+                "corners": ((np.array(local_box["corners"]) * [x1 - x0, y1 - y0] + [x0, y0]) / [width, height]).tolist(),
+            })
+    if not candidates:
+        raise ValueError("此处没有检测到可靠的棋盘网格，请把框画在可见黑白格内部，或使用“自动检测本图”查看候选")
+    best = max(candidates, key=lambda box: (len(box.get("corners", [])), box.get("confidence", 0)))
+    return {**best, "seed_points": points, "source": "refined"}
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ManualBoardBoxTool/1.0"
+    server_version = "CheckerboardTool/2.0"
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"[{self.log_date_time_string()}] {fmt % args}")
@@ -429,7 +340,7 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError) as exc:
                 self.send_json({"error": str(exc)}, 400)
             return
-        if route == "/api/refine":
+        if route in {"/api/refine", "/api/detect"}:
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 100_000:
@@ -440,7 +351,8 @@ class Handler(BaseHTTPRequestHandler):
                 name = payload.get("name")
                 if not isinstance(name, str) or name not in image_names():
                     raise ValueError("找不到这张图片。")
-                result = refine_checkerboard(resolve_image(name), payload.get("points"))
+                result = (detect_checkerboards(resolve_image(name)) if route == "/api/detect"
+                          else refine_checkerboard(resolve_image(name), payload.get("points")))
                 self.send_json({"ok": True, **result})
             except RuntimeError as exc:
                 self.send_json({"error": str(exc)}, 500)
@@ -481,7 +393,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}"
-    print(f"手动画框网页已启动：{url}")
+    print(f"棋盘格检测网页已启动：{url}")
     threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()

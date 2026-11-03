@@ -285,6 +285,11 @@ def _candidate_for_lattice(gray: np.ndarray, region: dict, lattice: tuple[bool, 
     grid = np.array([(x, y) for y in range(rows) for x in range(cols)], np.float32)
     if len(points) != len(grid):
         return None
+    # Rectification can place a proposed corner beyond the original image.
+    # Reject that lattice before OpenCV's subpixel refinement asserts; later
+    # hypotheses may still explain the visible portion of the same board.
+    if not np.isfinite(points).all() or np.any(points < 0) or np.any(points > [gray.shape[1] - 1, gray.shape[0] - 1]):
+        return None
     lattice = points.reshape(rows, cols, 2)
     pitch = float(np.median(np.r_[np.linalg.norm(np.diff(lattice, axis=1), axis=2).ravel(), np.linalg.norm(np.diff(lattice, axis=0), axis=2).ravel()]))
     if pitch < 3:
@@ -430,14 +435,20 @@ def _candidate(gray: np.ndarray, region: dict) -> dict | None:
 
     def hypotheses():
         yield next(raw_lattices)
-        rectified = _rectified_lattice(gray, region)
+        try:
+            rectified = _rectified_lattice(gray, region)
+        except (cv2.error, np.linalg.LinAlgError):
+            rectified = None
         if rectified is not None:
             yield rectified
         yield from raw_lattices
 
     best = None
     for lattice in hypotheses():
-        candidate = _candidate_for_lattice(gray, region, lattice)
+        try:
+            candidate = _candidate_for_lattice(gray, region, lattice)
+        except (cv2.error, np.linalg.LinAlgError):
+            continue
         if candidate is None:
             continue
         if best is None or candidate["quality"] > best["quality"]:

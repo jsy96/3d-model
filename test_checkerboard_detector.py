@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 import calibration_labeler as labeler
+import checkerboard_detector as detector
 from checkerboard_detector import find_boards
 
 
@@ -97,6 +98,63 @@ class DetectionTests(unittest.TestCase):
 
     def test_plain_image_has_no_candidates(self) -> None:
         self.assertEqual(find_boards(np.full((600, 480), 200, np.uint8))["boxes"], [])
+
+    def test_invalid_lattice_corners_are_rejected(self) -> None:
+        image = checkerboard()
+        regions, _ = detector._regions(image)
+        region = regions[0]
+        x0, y0, x1, y1 = region["rect"]
+        complete, corners, cols, rows = detector._find_lattice(image[y0:y1, x0:x1])
+        self.assertIsNotNone(corners)
+        for point in ((-1, 100), (480, 100), (100, 600), (np.nan, 100), (100, np.inf)):
+            with self.subTest(point=point):
+                invalid = corners.copy()
+                invalid.reshape(-1, 2)[0] = np.asarray(point) - [x0, y0]
+                self.assertIsNone(detector._candidate_for_lattice(image, region, (complete, invalid, cols, rows)))
+
+    def test_failed_hypothesis_does_not_discard_board(self) -> None:
+        image = checkerboard()
+        regions, _ = detector._regions(image)
+        region = regions[0]
+        x0, y0, x1, y1 = region["rect"]
+        valid = detector._find_lattice(image[y0:y1, x0:x1])
+        original_candidate = detector._candidate_for_lattice
+
+        def evaluate(gray, region, lattice):
+            if lattice[1] is None:
+                raise cv2.error("Invalid candidate")
+            return original_candidate(gray, region, lattice)
+
+        # Fail both an individual candidate and the optional rectification;
+        # the later valid lattice must still produce the complete board.
+        with patch.object(detector, "_lattice_hypotheses", return_value=iter([(False, None, 0, 0), valid])), \
+             patch.object(detector, "_rectified_lattice", side_effect=cv2.error("Rectification failed")), \
+             patch.object(detector, "_candidate_for_lattice", side_effect=evaluate):
+            result = detector._candidate(image, region)
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result["corners"]), 88)
+
+    def test_image_11_board_25_refines_at_right_edge(self) -> None:
+        root = Path(__file__).resolve().parent
+        image_path = root / "生产项目/data/images/微信图片_20261102105444_204_5.jpg"
+        if not image_path.is_file():
+            self.skipTest("Production image fixture is not present")
+
+        # Keep the reported manual seed independent of subsequent saved edits.
+        x, y, width, height = 0.9074611781314168, 0.21913501026694046, 0.06367909394250515, 0.10282982546201233
+        seed = [{"x": px, "y": py} for px, py in ((x, y), (x + width, y), (x + width, y + height), (x, y + height))]
+        result = labeler.refine_checkerboard(image_path, seed)
+
+        self.assertEqual(set(result["detected_squares"]), {9, 12})
+        self.assertTrue(result["partial"])
+        self.assertGreaterEqual(len(result["corners"]), 76)
+        self.assert_coordinates(result)
+        polygon = np.array([[point["x"], point["y"]] for point in result["points"]], np.float32) * [4032, 3024]
+        # Check the visible perimeter so a neighboring or shifted grid fails.
+        expected = np.array([[4031, 528], [4031, 949], [3921, 1101], [3372, 1113], [3639, 535]], np.float32)
+        intersection, _ = cv2.intersectConvexConvex(polygon.astype(np.float32), expected)
+        union = cv2.contourArea(polygon.astype(np.float32)) + cv2.contourArea(expected) - intersection
+        self.assertGreater(intersection / union, 0.97)
 
     def test_merged_regions_and_edge_board_refine(self) -> None:
         root = Path(__file__).resolve().parent
